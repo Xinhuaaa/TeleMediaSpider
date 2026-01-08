@@ -16,3 +16,4 @@ data/
 /TeleMediaSpider
 /TeleMediaSpider.exe
 verify_config.js
+package-lock.json

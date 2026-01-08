@@ -19,6 +19,7 @@ import {
     array2dictionary, consoletable, DataDir, ellipsisLeft, ellipsisMiddle, md5, sanitizeFolderName, waitForever,
     waitTill
 } from './functions';
+import { MenuSystem, GroupInfo } from './menu';
 import { AnnotatedDictionary, UnwrapAnnotatedDictionary } from './types';
 
 const argv = minimist(process.argv.slice(2));
@@ -688,6 +689,7 @@ let logHistory: string[] = [];
 let logger: Logger = new MyLogger();
 let client: TelegramClient;
 let tonfig: Tonfig;
+let menuSystem: MenuSystem;
 
 let uiTimer: Cron;
 let mainTimer: Cron;
@@ -717,6 +719,8 @@ const waitQueue: AnnotatedDictionary<{
 let execQueue;
 
 async function mediaSpider() {
+    if (!isDownloading) return;
+    
     await client.connect();
 
     const allowChannels = tonfig.get<string[]>('spider.channels', []);
@@ -925,11 +929,6 @@ async function loadConfig() {
             },
         },
 
-        groupFilter: {
-            mode: "whitelist",
-            groupIds: [],
-        },
-
         fileOrganization: {
             enabled: false,
             createSubfolders: true,
@@ -993,7 +992,7 @@ async function interactiveConfig() {
     logger.info('');
     
     // Step 1: API credentials
-    logger.info('步骤 1/6: Telegram API 配置');
+    logger.info('步骤 1/3: Telegram API 配置');
     logger.info('请访问 https://my.telegram.org/apps 获取 API ID 和 API Hash');
     
     let apiId: number;
@@ -1011,46 +1010,12 @@ async function interactiveConfig() {
     
     // Step 2: Account
     logger.info('');
-    logger.info('步骤 2/6: 账号配置');
+    logger.info('步骤 2/3: 账号配置');
     const account = await input.text('请输入 Telegram 账号（需要加上区号，例如: +861xxxxxxxxxx）: ');
     
-    // Step 3: Group filter mode
+    // Step 3: File organization
     logger.info('');
-    logger.info('步骤 3/6: 群组过滤模式');
-    logger.info('1. 白名单模式 - 仅下载指定群组的内容');
-    logger.info('2. 黑名单模式 - 下载除指定群组外的所有内容');
-    
-    let filterMode: string;
-    while (true) {
-        const filterModeChoice = await input.text('请选择模式 (1 或 2, 默认: 1): ');
-        const trimmedChoice = filterModeChoice.trim();
-        if (trimmedChoice === '1' || trimmedChoice === '') {
-            filterMode = 'whitelist';
-            break;
-        } else if (trimmedChoice === '2') {
-            filterMode = 'blacklist';
-            break;
-        }
-        logger.warn('请输入 1 或 2');
-    }
-    
-    // Step 4: Group IDs
-    logger.info('');
-    logger.info('步骤 4/6: 群组过滤配置');
-    logger.info('群组 ID 可以在频道列表文件 data/channels.txt 中找到');
-    const groupIdsInput = await input.text('请输入要过滤的群组 ID（多个用英文逗号分隔，留空跳过）: ');
-    const groupIds = parseCommaSeparatedList(groupIdsInput);
-    
-    // Step 5: Default media types
-    logger.info('');
-    logger.info('步骤 5/6: 默认下载文件类型');
-    logger.info('可选类型: photo, video, audio, file');
-    const mediaTypesInput = await input.text('请输入要下载的文件类型（多个用英文逗号分隔，默认: photo,video,audio,file）: ');
-    const mediaTypes = mediaTypesInput.trim() || 'photo,video,audio,file';
-    
-    // Step 6: File organization
-    logger.info('');
-    logger.info('步骤 6/6: 文件分类存储');
+    logger.info('步骤 3/3: 文件分类存储');
     const enableOrgChoice = await input.text('是否按文件类型分类存储到子文件夹 (photo/, video/, audio/, file/)? (y/n, 默认: n): ');
     const enableOrganization = parseYesNoInput(enableOrgChoice);
     
@@ -1058,9 +1023,6 @@ async function interactiveConfig() {
     tonfig.set('account.apiId', apiId);
     tonfig.set('account.apiHash', apiHash);
     tonfig.set('account.account', account);
-    tonfig.set('groupFilter.mode', filterMode);
-    tonfig.set('groupFilter.groupIds', groupIds);
-    tonfig.set(['spider', 'medias', '_'], mediaTypes);
     tonfig.set('fileOrganization.enabled', enableOrganization);
     tonfig.set('fileOrganization.createSubfolders', true);
     
@@ -1071,24 +1033,228 @@ async function interactiveConfig() {
     logger.info('');
 }
 
+async function initializeGroupSelection() {
+    logger.info('');
+    logger.info('===== 群组选择 =====');
+    logger.info('正在获取您的群组和频道列表...');
+    logger.info('');
+    
+    const availableGroups: GroupInfo[] = channelInfos.map(ch => ({
+        id: ch.id.toString(),
+        title: ch.title,
+        username: ch.username,
+    }));
+    
+    const selectedIds = await menuSystem.selectGroups(availableGroups, []);
+    
+    if (selectedIds.length === 0) {
+        logger.warn('您没有选择任何群组，请至少选择一个群组');
+        await menuSystem.waitForKeyPress();
+        return await initializeGroupSelection();
+    }
+    
+    tonfig.set('spider.channels', selectedIds);
+    await tonfig.save();
+    
+    logger.info('');
+    menuSystem.showSuccess(`已保存 ${selectedIds.length} 个群组到配置文件`);
+    
+    // Set default media types
+    const defaultMediaTypes = await menuSystem.selectFileTypes(['photo', 'video', 'audio', 'file']);
+    if (defaultMediaTypes.length > 0) {
+        tonfig.set(['spider', 'medias', '_'], defaultMediaTypes.join(','));
+        await tonfig.save();
+        menuSystem.showSuccess('已保存默认文件类型配置');
+    }
+    
+    logger.info('');
+    await menuSystem.waitForKeyPress();
+}
+
+async function addGroupsToSync() {
+    const currentChannels = tonfig.get<string[]>('spider.channels', []);
+    const availableGroups: GroupInfo[] = channelInfos
+        .filter(ch => !currentChannels.includes(ch.id.toString()))
+        .map(ch => ({
+            id: ch.id.toString(),
+            title: ch.title,
+            username: ch.username,
+        }));
+    
+    if (availableGroups.length === 0) {
+        menuSystem.showError('没有可添加的群组（所有群组都已在同步列表中）');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const selectedIds = await menuSystem.selectGroups(availableGroups, []);
+    
+    if (selectedIds.length === 0) {
+        logger.info('未选择任何群组');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const newChannels = [...currentChannels, ...selectedIds];
+    tonfig.set('spider.channels', newChannels);
+    await tonfig.save();
+    
+    menuSystem.showSuccess(`成功添加 ${selectedIds.length} 个群组`);
+    await menuSystem.waitForKeyPress();
+}
+
+async function removeGroupsFromSync() {
+    const currentChannels = tonfig.get<string[]>('spider.channels', []);
+    
+    if (currentChannels.length === 0) {
+        menuSystem.showError('当前没有已同步的群组');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const currentGroups: GroupInfo[] = channelInfos
+        .filter(ch => currentChannels.includes(ch.id.toString()))
+        .map(ch => ({
+            id: ch.id.toString(),
+            title: ch.title,
+            username: ch.username,
+        }));
+    
+    const selectedIds = await menuSystem.selectGroupsToRemove(currentGroups);
+    
+    if (selectedIds.length === 0) {
+        logger.info('未选择任何群组');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const confirmed = await menuSystem.confirmAction(`确定要移除 ${selectedIds.length} 个群组吗？`);
+    if (!confirmed) {
+        logger.info('已取消操作');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const newChannels = currentChannels.filter(id => !selectedIds.includes(id));
+    tonfig.set('spider.channels', newChannels);
+    await tonfig.save();
+    
+    menuSystem.showSuccess(`成功移除 ${selectedIds.length} 个群组`);
+    await menuSystem.waitForKeyPress();
+}
+
+async function reinitializeGroups() {
+    const confirmed = await menuSystem.confirmAction('确定要清空当前配置并重新选择所有群组吗？');
+    if (!confirmed) {
+        logger.info('已取消操作');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    tonfig.set('spider.channels', []);
+    await tonfig.save();
+    
+    await initializeGroupSelection();
+}
+
+async function handleGroupManagement() {
+    while (true) {
+        const currentChannels = tonfig.get<string[]>('spider.channels', []);
+        const currentGroups: GroupInfo[] = channelInfos
+            .filter(ch => currentChannels.includes(ch.id.toString()))
+            .map(ch => ({
+                id: ch.id.toString(),
+                title: ch.title,
+                username: ch.username,
+            }));
+        
+        const choice = await menuSystem.showGroupManagementMenu(currentGroups);
+        
+        switch (choice) {
+            case 'A':
+                await addGroupsToSync();
+                break;
+            case 'R':
+                await removeGroupsFromSync();
+                break;
+            case 'C':
+                await reinitializeGroups();
+                break;
+            case '0':
+                return;
+        }
+    }
+}
+
+async function handleFileTypeConfiguration() {
+    const currentMediaTypes = tonfig.get<string>(['spider', 'medias', '_'], 'photo,video,audio,file');
+    const currentTypes = currentMediaTypes.split(',').map(t => t.trim());
+    
+    const selectedTypes = await menuSystem.selectFileTypes(currentTypes);
+    
+    if (selectedTypes.length === 0) {
+        menuSystem.showError('至少需要选择一种文件类型');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    tonfig.set(['spider', 'medias', '_'], selectedTypes.join(','));
+    await tonfig.save();
+    
+    menuSystem.showSuccess('文件类型配置已保存');
+    await menuSystem.waitForKeyPress();
+}
+
+async function handleOtherSettings() {
+    while (true) {
+        const choice = await menuSystem.showOtherSettingsMenu();
+        
+        switch (choice) {
+            case '1': {
+                const currentConcurrency = tonfig.get<number>('spider.concurrency', 5);
+                const newConcurrency = await menuSystem.inputNumber(
+                    '请输入并发下载数（同时下载的群组数量）:',
+                    currentConcurrency
+                );
+                tonfig.set('spider.concurrency', newConcurrency);
+                await tonfig.save();
+                menuSystem.showSuccess(`并发数已设置为 ${newConcurrency}`);
+                await menuSystem.waitForKeyPress();
+                break;
+            }
+            case '2': {
+                const currentEnabled = tonfig.get<boolean>('fileOrganization.enabled', false);
+                const newEnabled = await menuSystem.toggleSetting(
+                    '是否按文件类型分类存储到子文件夹?',
+                    currentEnabled
+                );
+                tonfig.set('fileOrganization.enabled', newEnabled);
+                await tonfig.save();
+                menuSystem.showSuccess(`文件分类存储已${newEnabled ? '启用' : '禁用'}`);
+                await menuSystem.waitForKeyPress();
+                break;
+            }
+            case '3': {
+                const currentGroupMessage = tonfig.get<boolean>('spider.groupMessage', false);
+                const newGroupMessage = await menuSystem.toggleSetting(
+                    '是否启用消息聚合（同一条消息的多个文件放在子文件夹中）?',
+                    currentGroupMessage
+                );
+                tonfig.set('spider.groupMessage', newGroupMessage);
+                await tonfig.save();
+                menuSystem.showSuccess(`消息聚合已${newGroupMessage ? '启用' : '禁用'}`);
+                await menuSystem.waitForKeyPress();
+                break;
+            }
+            case '0':
+                return;
+        }
+    }
+}
+
 function shouldProcessChannel(channelId: string): boolean {
-    const filterMode = tonfig.get<string>('groupFilter.mode', 'whitelist');
-    const groupIds = tonfig.get<string[]>('groupFilter.groupIds', []);
-    
-    // If no filter is configured, process all channels (backward compatibility)
-    if (!groupIds || groupIds.length === 0) {
-        return true;
-    }
-    
-    const isInList = groupIds.includes(channelId);
-    
-    if (filterMode === 'whitelist') {
-        // Whitelist mode: only process channels in the list
-        return isInList;
-    } else {
-        // Blacklist mode: process all channels except those in the list
-        return !isInList;
-    }
+    const allowChannels = tonfig.get<string[]>('spider.channels', []);
+    return allowChannels.includes(channelId);
 }
 
 function getOrganizedDir(baseDir: string, mediaType: 'photo' | 'video' | 'audio' | 'file'): string {
@@ -1114,32 +1280,114 @@ async function checkConfig() {
     }
 }
 
-async function checkChannel() {
-    await loadConfig();
-
+async function checkChannelConfig() {
     const allowChannels = tonfig.get<string[]>('spider.channels', []);
 
     if (!allowChannels?.length) {
-        logger.info('请编辑 data/config.toml 进行频道配置，软件将开始检测并自动重载');
-        logger.info('https://github.com/liesauer/TeleMediaSpider?tab=readme-ov-file#2-%E9%85%8D%E7%BD%AE%E9%A2%91%E9%81%93%E5%88%97%E8%A1%A8');
-
-        const timer = setInterval(() => {
-            loadConfig();
-        }, 3000);
-
-        await waitTill(() => {
-            const allowChannels = tonfig.get<string[]>('spider.channels', []);
-
-            if (allowChannels?.length) {
-                clearInterval(timer);
-                logger.info('读取到频道配置，正在重载');
-
-                return true;
-            }
-
-            return false;
-        }, 1000);
+        logger.info('');
+        logger.info('首次使用需要选择要同步的群组');
+        await initializeGroupSelection();
     }
+}
+
+let isDownloading = false;
+
+async function startDownload() {
+    if (isDownloading) {
+        menuSystem.showError('下载已在进行中');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    const allowChannels = tonfig.get<string[]>('spider.channels', []);
+    if (allowChannels.length === 0) {
+        menuSystem.showError('没有配置要下载的群组，请先配置群组');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    isDownloading = true;
+    
+    // Start timers
+    if (uiTimer && uiTimer['_states'].paused) {
+        uiTimer.resume();
+    }
+    
+    if (!mediaSpiderTimer) {
+        mediaSpiderTimer = Cron("*/10 * * * * *", {
+            name: 'mediaSpider',
+            protect: true,
+            catch: workerErrorHandler,
+        }, async () => await mediaSpider());
+    }
+    
+    const concurrency = tonfig.get<number>("spider.concurrency", 5);
+    const groupMessage = tonfig.get<boolean>("spider.groupMessage", false);
+    const saveRawMessage = tonfig.get<boolean>("spider.saveRawMessage", false);
+    
+    if (!execQueue) {
+        execQueue = queue(async function(task, callback) {
+            let channelInfo: UnwrapAnnotatedDictionary<typeof waitQueue>;
+
+            await waitTill(() => {
+                channelInfo = Object.values(waitQueue).filter(v => !v.downloading && v.messages.length).sort((a, b) => {
+                    return a.lastDownloadTime - b.lastDownloadTime;
+                })[0];
+
+                return !!channelInfo;
+            }, 100);
+
+            channelInfo.downloading = true;
+
+            const channelId = channelInfo.channelId;
+            const message = channelInfo.messages[0];
+            const mediasArr = channelInfo.medias;
+
+            await downloadChannelMedia(client, channelId, message, channelInfo, mediasArr, groupMessage, saveRawMessage).then(async () => {
+                channelInfo.messages.shift();
+
+                if (!message['comment']) {
+                    // 下载成功，保存当前频道位置
+                    tonfig.set(['spider', 'lastIds', channelId], message.id);
+                    await tonfig.save();
+                }
+            }, () => {
+                // 下载失败，啥也不用管，后面根据队列自动重试
+            }).finally(() => {
+                channelInfo.downloading = false;
+                channelInfo.lastDownloadTime = Date.now();
+
+                callback();
+            });
+        }, concurrency);
+    }
+    
+    logger.info('下载已开始，正在后台运行...');
+    logger.info('程序将返回主菜单，您可以随时停止下载或进行其他操作');
+    await menuSystem.waitForKeyPress();
+}
+
+async function stopDownload() {
+    if (!isDownloading) {
+        menuSystem.showError('当前没有正在进行的下载');
+        await menuSystem.waitForKeyPress();
+        return;
+    }
+    
+    isDownloading = false;
+    
+    // Stop timers
+    if (mediaSpiderTimer) {
+        mediaSpiderTimer.stop();
+        mediaSpiderTimer = null;
+    }
+    
+    if (uiTimer && !uiTimer['_states'].paused) {
+        uiTimer.pause();
+    }
+    
+    menuSystem.showSuccess('下载已停止');
+    await menuSystem.waitForKeyPress();
 }
 
 async function main() {
@@ -1148,6 +1396,8 @@ async function main() {
     mkdirSync(DataDir(), { recursive: true });
 
     await checkConfig();
+    
+    menuSystem = new MenuSystem(logger, () => isDownloading);
 
     const saveRawMessage = tonfig.get<boolean>("spider.saveRawMessage", false);
 
@@ -1245,82 +1495,48 @@ async function main() {
         }
     }
 
-    if (!listChannels) {
-        await checkChannel();
-    }
-
-    if (uiTimer) {
-        uiTimer.resume();
-    }
-
     if (listChannels) {
+        if (uiTimer) {
+            uiTimer.resume();
+        }
         // 等待render输出channelTable
         // 后面代码不再执行
         await waitForever();
     }
 
-    const concurrency = tonfig.get<number>("spider.concurrency", 5);
-
-    const groupMessage = tonfig.get<boolean>("spider.groupMessage", false);
-
-    execQueue = execQueue || queue(async function(task, callback) {
-        let channelInfo: UnwrapAnnotatedDictionary<typeof waitQueue>;
-
-        await waitTill(() => {
-            channelInfo = Object.values(waitQueue).filter(v => !v.downloading && v.messages.length).sort((a, b) => {
-                return a.lastDownloadTime - b.lastDownloadTime;
-            })[0];
-
-            return !!channelInfo;
-        }, 100);
-
-        channelInfo.downloading = true;
-
-        const channelId = channelInfo.channelId;
-        const message = channelInfo.messages[0];
-        const mediasArr = channelInfo.medias;
-
-        // channelInfo.messages.shift();
-
-        // // 下载成功，保存当前频道位置
-        // tonfig.set(['spider', 'lastIds', channelId], message.id);
-        // await tonfig.save();
-
-        // channelInfo.downloading = false;
-        // channelInfo.lastDownloadTime = Date.now();
-
-        // callback();
-
-        await downloadChannelMedia(client, channelId, message, channelInfo, mediasArr, groupMessage, saveRawMessage).then(async () => {
-            channelInfo.messages.shift();
-
-            if (!message['comment']) {
-                // 下载成功，保存当前频道位置
-                tonfig.set(['spider', 'lastIds', channelId], message.id);
-                await tonfig.save();
-            }
-        }, () => {
-            // 下载失败，啥也不用管，后面根据队列自动重试
-        }).finally(() => {
-            channelInfo.downloading = false;
-            channelInfo.lastDownloadTime = Date.now();
-
-            callback();
-        });
-    }, concurrency);
-
-    if (mediaSpiderTimer) {
-        mediaSpiderTimer.stop();
-        mediaSpiderTimer = null;
+    // Check if channels are configured, if not, run first-time setup
+    await checkChannelConfig();
+    
+    // Main menu loop
+    while (true) {
+        const choice = await menuSystem.showMainMenu();
+        
+        switch (choice) {
+            case '1':
+                await startDownload();
+                break;
+            case '2':
+                await stopDownload();
+                break;
+            case '3':
+                await handleGroupManagement();
+                break;
+            case '4':
+                await handleFileTypeConfiguration();
+                break;
+            case '5':
+                await handleOtherSettings();
+                break;
+            case '0':
+                console.clear();
+                logger.info('正在退出程序...');
+                if (isDownloading) {
+                    await stopDownload();
+                }
+                process.exit(0);
+                break;
+        }
     }
-
-    mediaSpiderTimer = Cron("*/10 * * * * *", {
-        name: 'mediaSpider',
-        protect: true,
-        catch: workerErrorHandler,
-    }, async () => await mediaSpider());
-
-    await waitForever();
 }
 
 uiTimer = Cron("*/2 * * * * *", {
