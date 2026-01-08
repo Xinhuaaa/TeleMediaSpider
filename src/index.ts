@@ -726,7 +726,7 @@ async function mediaSpider() {
         const channelTitle = channel.title || '';
 
         if (!allowChannels.includes(channelId)) continue;
-        
+
         // Apply group filter
         if (!shouldProcessChannel(channelId)) continue;
 
@@ -978,6 +978,16 @@ function getProxyConfig() {
     return { ip, port, username, password, MTProxy, secret, socksType, timeout };
 }
 
+function parseCommaSeparatedList(input: string): string[] {
+    if (!input || !input.trim()) return [];
+    return input.split(',').map(id => id.trim()).filter(id => id);
+}
+
+function parseYesNoInput(input: string): boolean {
+    const normalizedInput = input.trim().toLowerCase();
+    return ['y', 'yes', 'true', '1'].includes(normalizedInput);
+}
+
 async function interactiveConfig() {
     logger.info('===== 首次配置向导 =====');
     logger.info('');
@@ -1013,10 +1023,11 @@ async function interactiveConfig() {
     let filterMode: string;
     while (true) {
         const filterModeChoice = await input.text('请选择模式 (1 或 2, 默认: 1): ');
-        if (filterModeChoice === '1' || filterModeChoice === '') {
+        const trimmedChoice = filterModeChoice.trim();
+        if (trimmedChoice === '1' || trimmedChoice === '') {
             filterMode = 'whitelist';
             break;
-        } else if (filterModeChoice === '2') {
+        } else if (trimmedChoice === '2') {
             filterMode = 'blacklist';
             break;
         }
@@ -1028,7 +1039,7 @@ async function interactiveConfig() {
     logger.info('步骤 4/6: 群组过滤配置');
     logger.info('群组 ID 可以在频道列表文件 data/channels.txt 中找到');
     const groupIdsInput = await input.text('请输入要过滤的群组 ID（多个用英文逗号分隔，留空跳过）: ');
-    const groupIds = groupIdsInput ? groupIdsInput.split(',').map(id => id.trim()).filter(id => id) : [];
+    const groupIds = parseCommaSeparatedList(groupIdsInput);
     
     // Step 5: Default media types
     logger.info('');
@@ -1041,7 +1052,7 @@ async function interactiveConfig() {
     logger.info('');
     logger.info('步骤 6/6: 文件分类存储');
     const enableOrgChoice = await input.text('是否按文件类型分类存储到子文件夹 (photo/, video/, audio/, file/)? (y/n, 默认: n): ');
-    const enableOrganization = ['y', 'yes', 'Y', 'YES', 'true', '1'].includes(enableOrgChoice.trim());
+    const enableOrganization = parseYesNoInput(enableOrgChoice);
     
     // Save configuration
     tonfig.set('account.apiId', apiId);
