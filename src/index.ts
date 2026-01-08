@@ -16,7 +16,7 @@ import { Tonfig } from '@liesauer/tonfig';
 
 import { Db } from './db';
 import {
-    array2dictionary, consoletable, DataDir, ellipsisLeft, ellipsisMiddle, md5, waitForever,
+    array2dictionary, consoletable, DataDir, ellipsisLeft, ellipsisMiddle, md5, sanitizeFolderName, waitForever,
     waitTill
 } from './functions';
 import { AnnotatedDictionary, UnwrapAnnotatedDictionary } from './types';
@@ -411,6 +411,9 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
     let fullFileName = '';
     let absSavePath = '';
 
+    // Use channel title as folder name, fallback to channelId if title is empty
+    const folderName = sanitizeFolderName(channelInfo.channelTitle) || channelId;
+
     if (photo && (!medias || medias.includes('photo'))) {
         let media = message.media as Api.MessageMediaDocument;
 
@@ -418,7 +421,7 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             return;
         }
 
-        let dir = DataDir() + '/' + channelId;
+        let dir = DataDir() + '/' + folderName;
 
         let filename = `${messageId}`;
         let ext = '';
@@ -479,7 +482,7 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             return;
         }
 
-        let dir = DataDir() + '/' + channelId;
+        let dir = DataDir() + '/' + folderName;
 
         let filename = `${messageId}`;
         let ext = '';
@@ -540,7 +543,7 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             return;
         }
 
-        let dir = DataDir() + '/' + channelId;
+        let dir = DataDir() + '/' + folderName;
 
         let filename = `${messageId}`;
         let ext = '';
@@ -601,7 +604,7 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             return;
         }
 
-        let dir = DataDir() + '/' + channelId;
+        let dir = DataDir() + '/' + folderName;
 
         let filename = `${messageId}`;
         let ext = '';
