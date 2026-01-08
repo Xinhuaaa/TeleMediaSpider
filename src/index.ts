@@ -439,6 +439,9 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             }
         }
 
+        // Apply file organization
+        dir = getOrganizedDir(dir, 'photo');
+
         mkdirSync(dir, { recursive: true });
 
         if (message?.file) {
@@ -499,6 +502,9 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
                 filename = `${groupedId}_` + filename;
             }
         }
+
+        // Apply file organization
+        dir = getOrganizedDir(dir, 'video');
 
         mkdirSync(dir, { recursive: true });
 
@@ -561,6 +567,9 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
             }
         }
 
+        // Apply file organization
+        dir = getOrganizedDir(dir, 'audio');
+
         mkdirSync(dir, { recursive: true });
 
         if (message?.file) {
@@ -621,6 +630,9 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
                 filename = `${groupedId}_` + filename;
             }
         }
+
+        // Apply file organization
+        dir = getOrganizedDir(dir, 'file');
 
         mkdirSync(dir, { recursive: true });
 
@@ -714,6 +726,9 @@ async function mediaSpider() {
         const channelTitle = channel.title || '';
 
         if (!allowChannels.includes(channelId)) continue;
+        
+        // Apply group filter
+        if (!shouldProcessChannel(channelId)) continue;
 
         let medias = tonfig.get(['spider', 'medias', channelId], '');
 
@@ -910,6 +925,16 @@ async function loadConfig() {
             },
         },
 
+        groupFilter: {
+            mode: "whitelist",
+            groupIds: [],
+        },
+
+        fileOrganization: {
+            enabled: false,
+            createSubfolders: true,
+        },
+
         proxy: {
             ip: "127.0.0.1",
             port: 0,
@@ -953,31 +978,103 @@ function getProxyConfig() {
     return { ip, port, username, password, MTProxy, secret, socksType, timeout };
 }
 
+async function interactiveConfig() {
+    logger.info('===== 首次配置向导 =====');
+    logger.info('');
+    
+    // Step 1: API credentials
+    logger.info('步骤 1/6: Telegram API 配置');
+    logger.info('请访问 https://my.telegram.org/apps 获取 API ID 和 API Hash');
+    const apiId = await input.text('请输入 API ID: ');
+    const apiHash = await input.text('请输入 API Hash: ');
+    
+    // Step 2: Account
+    logger.info('');
+    logger.info('步骤 2/6: 账号配置');
+    const account = await input.text('请输入 Telegram 账号（需要加上区号，例如: +861xxxxxxxxxx）: ');
+    
+    // Step 3: Group filter mode
+    logger.info('');
+    logger.info('步骤 3/6: 群组过滤模式');
+    logger.info('1. 白名单模式 - 仅下载指定群组的内容');
+    logger.info('2. 黑名单模式 - 下载除指定群组外的所有内容');
+    const filterModeChoice = await input.text('请选择模式 (1 或 2): ');
+    const filterMode = filterModeChoice === '2' ? 'blacklist' : 'whitelist';
+    
+    // Step 4: Group IDs
+    logger.info('');
+    logger.info('步骤 4/6: 群组过滤配置');
+    const groupIdsInput = await input.text('请输入要过滤的群组 ID（多个用英文逗号分隔，留空跳过）: ');
+    const groupIds = groupIdsInput ? groupIdsInput.split(',').map(id => id.trim()).filter(id => id) : [];
+    
+    // Step 5: Default media types
+    logger.info('');
+    logger.info('步骤 5/6: 默认下载文件类型');
+    logger.info('可选类型: photo, video, audio, file');
+    const mediaTypesInput = await input.text('请输入要下载的文件类型（多个用英文逗号分隔，默认: photo,video,audio,file）: ');
+    const mediaTypes = mediaTypesInput.trim() || 'photo,video,audio,file';
+    
+    // Step 6: File organization
+    logger.info('');
+    logger.info('步骤 6/6: 文件分类存储');
+    const enableOrgChoice = await input.text('是否按文件类型分类存储到子文件夹 (photo/, video/, audio/, file/)? (y/n, 默认: n): ');
+    const enableOrganization = enableOrgChoice.toLowerCase() === 'y' || enableOrgChoice.toLowerCase() === 'yes';
+    
+    // Save configuration
+    tonfig.set('account.apiId', parseInt(apiId));
+    tonfig.set('account.apiHash', apiHash);
+    tonfig.set('account.account', account);
+    tonfig.set('groupFilter.mode', filterMode);
+    tonfig.set('groupFilter.groupIds', groupIds);
+    tonfig.set(['spider', 'medias', '_'], mediaTypes);
+    tonfig.set('fileOrganization.enabled', enableOrganization);
+    tonfig.set('fileOrganization.createSubfolders', true);
+    
+    await tonfig.save();
+    
+    logger.info('');
+    logger.info('配置已保存！');
+    logger.info('');
+}
+
+function shouldProcessChannel(channelId: string): boolean {
+    const filterMode = tonfig.get<string>('groupFilter.mode', 'whitelist');
+    const groupIds = tonfig.get<string[]>('groupFilter.groupIds', []);
+    
+    // If no filter is configured, process all channels (backward compatibility)
+    if (!groupIds || groupIds.length === 0) {
+        return true;
+    }
+    
+    const isInList = groupIds.includes(channelId);
+    
+    if (filterMode === 'whitelist') {
+        // Whitelist mode: only process channels in the list
+        return isInList;
+    } else {
+        // Blacklist mode: process all channels except those in the list
+        return !isInList;
+    }
+}
+
+function getOrganizedDir(baseDir: string, mediaType: 'photo' | 'video' | 'audio' | 'file'): string {
+    const fileOrgEnabled = tonfig.get<boolean>('fileOrganization.enabled', false);
+    const createSubfolders = tonfig.get<boolean>('fileOrganization.createSubfolders', true);
+    
+    if (fileOrgEnabled && createSubfolders) {
+        return `${baseDir}/${mediaType}`;
+    }
+    
+    return baseDir;
+}
+
 async function checkConfig() {
     await loadConfig();
 
     const { apiId, apiHash, account } = getAccountConfig();
 
     if (!apiId || !apiHash || !account) {
-        logger.info('请编辑 data/config.toml 进行账号配置，软件将开始检测并自动重载');
-        logger.info('https://github.com/liesauer/TeleMediaSpider?tab=readme-ov-file#1-%E9%A6%96%E6%AC%A1%E8%BF%90%E8%A1%8C');
-
-        const timer = setInterval(() => {
-            loadConfig();
-        }, 3000);
-
-        await waitTill(() => {
-            const { apiId, apiHash, account } = getAccountConfig();
-
-            if (apiId && apiHash && account) {
-                clearInterval(timer);
-                logger.info('读取到账号配置，正在重载');
-
-                return true;
-            }
-
-            return false;
-        }, 1000);
+        await interactiveConfig();
     }
 }
 
