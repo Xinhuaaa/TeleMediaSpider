@@ -131,11 +131,17 @@ export class AcceleratedDownloader {
                 return null;
             }
 
+            // Get the type string for thumbSize - PhotoSizeProgressive doesn't have a 'type' property
+            let thumbSize = '';
+            if (largestSize instanceof Api.PhotoSize) {
+                thumbSize = largestSize.type || '';
+            }
+
             const location = new Api.InputPhotoFileLocation({
                 id: photo.id,
                 accessHash: photo.accessHash,
                 fileReference: photo.fileReference,
-                thumbSize: (largestSize as Api.PhotoSize).type || '',
+                thumbSize: thumbSize,
             });
 
             return {
