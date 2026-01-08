@@ -21,6 +21,7 @@ import {
 } from './functions';
 import { MenuSystem, GroupInfo } from './menu';
 import { AnnotatedDictionary, UnwrapAnnotatedDictionary } from './types';
+import { AcceleratedDownloader, DownloadConfig } from './downloader';
 
 const argv = minimist(process.argv.slice(2));
 
@@ -467,14 +468,12 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
 
         channelInfo.fileName = fullFileName;
 
-        const buffer = await client.downloadMedia(message.media, {
-            progressCallback: (bytes, total) => {
-                channelInfo.downloadedBytes = bytes;
-                channelInfo.totalBytes = total;
-            },
-        });
-
         absSavePath = `${dir}/${fullFileName}`;
+
+        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
+            channelInfo.downloadedBytes = bytes;
+            channelInfo.totalBytes = total;
+        });
 
         await writeFile(absSavePath, buffer);
     }
@@ -531,14 +530,12 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
 
         channelInfo.fileName = fullFileName;
 
-        const buffer = await client.downloadMedia(message.media, {
-            progressCallback: (bytes, total) => {
-                channelInfo.downloadedBytes = bytes;
-                channelInfo.totalBytes = total;
-            },
-        });
-
         absSavePath = `${dir}/${fullFileName}`;
+
+        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
+            channelInfo.downloadedBytes = bytes;
+            channelInfo.totalBytes = total;
+        });
 
         await writeFile(absSavePath, buffer);
     }
@@ -595,14 +592,12 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
 
         channelInfo.fileName = fullFileName;
 
-        const buffer = await client.downloadMedia(message.media, {
-            progressCallback: (bytes, total) => {
-                channelInfo.downloadedBytes = bytes;
-                channelInfo.totalBytes = total;
-            },
-        });
-
         absSavePath = `${dir}/${fullFileName}`;
+
+        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
+            channelInfo.downloadedBytes = bytes;
+            channelInfo.totalBytes = total;
+        });
 
         await writeFile(absSavePath, buffer);
     }
@@ -659,14 +654,12 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
 
         channelInfo.fileName = fullFileName;
 
-        const buffer = await client.downloadMedia(message.media, {
-            progressCallback: (bytes, total) => {
-                channelInfo.downloadedBytes = bytes;
-                channelInfo.totalBytes = total;
-            },
-        });
-
         absSavePath = `${dir}/${fullFileName}`;
+
+        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
+            channelInfo.downloadedBytes = bytes;
+            channelInfo.totalBytes = total;
+        });
 
         await writeFile(absSavePath, buffer);
     }
@@ -690,6 +683,7 @@ let logger: Logger = new MyLogger();
 let client: TelegramClient;
 let tonfig: Tonfig;
 let menuSystem: MenuSystem;
+let acceleratedDownloader: AcceleratedDownloader;
 
 let uiTimer: Cron;
 let mainTimer: Cron;
@@ -906,6 +900,10 @@ async function loadConfig() {
             },
             groupMessage: false,
             saveRawMessage: false,
+            enableDownloadAcceleration: true,
+            downloadThreads: 5,
+            chunkSize: 524288,
+            maxRetries: 3,
         },
 
         filter: {
@@ -1446,6 +1444,15 @@ async function main() {
             await waitForever();
         }
     }
+
+    // Initialize accelerated downloader
+    const downloadConfig: DownloadConfig = {
+        enableDownloadAcceleration: tonfig.get<boolean>('spider.enableDownloadAcceleration', true),
+        downloadThreads: tonfig.get<number>('spider.downloadThreads', 5),
+        chunkSize: tonfig.get<number>('spider.chunkSize', 524288),
+        maxRetries: tonfig.get<number>('spider.maxRetries', 3),
+    };
+    acceleratedDownloader = new AcceleratedDownloader(client, downloadConfig, logger);
 
     logger.info('获取频道信息中...');
 
