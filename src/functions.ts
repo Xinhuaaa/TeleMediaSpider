@@ -177,3 +177,10 @@ export function ellipsisMiddle(text: string, maxLength: number) {
 export function md5(text: string) {
     return crypto.createHash('md5').update(text).digest('hex');
 }
+
+export function sanitizeFolderName(name: string): string {
+    if (!name) return '';
+    // Remove characters that are invalid for folder names on Windows/Linux/macOS
+    // Invalid characters: / \ : * ? " < > |
+    return name.replace(/[/\\:*?"<>|]/g, '_').trim();
+}
