@@ -985,7 +985,18 @@ async function interactiveConfig() {
     // Step 1: API credentials
     logger.info('步骤 1/6: Telegram API 配置');
     logger.info('请访问 https://my.telegram.org/apps 获取 API ID 和 API Hash');
-    const apiId = await input.text('请输入 API ID: ');
+    
+    let apiId: number;
+    while (true) {
+        const apiIdInput = await input.text('请输入 API ID: ');
+        const parsed = parseInt(apiIdInput, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+            apiId = parsed;
+            break;
+        }
+        logger.warn('API ID 必须是有效的正整数，请重新输入');
+    }
+    
     const apiHash = await input.text('请输入 API Hash: ');
     
     // Step 2: Account
@@ -998,12 +1009,24 @@ async function interactiveConfig() {
     logger.info('步骤 3/6: 群组过滤模式');
     logger.info('1. 白名单模式 - 仅下载指定群组的内容');
     logger.info('2. 黑名单模式 - 下载除指定群组外的所有内容');
-    const filterModeChoice = await input.text('请选择模式 (1 或 2): ');
-    const filterMode = filterModeChoice === '2' ? 'blacklist' : 'whitelist';
+    
+    let filterMode: string;
+    while (true) {
+        const filterModeChoice = await input.text('请选择模式 (1 或 2, 默认: 1): ');
+        if (filterModeChoice === '1' || filterModeChoice === '') {
+            filterMode = 'whitelist';
+            break;
+        } else if (filterModeChoice === '2') {
+            filterMode = 'blacklist';
+            break;
+        }
+        logger.warn('请输入 1 或 2');
+    }
     
     // Step 4: Group IDs
     logger.info('');
     logger.info('步骤 4/6: 群组过滤配置');
+    logger.info('群组 ID 可以在频道列表文件 data/channels.txt 中找到');
     const groupIdsInput = await input.text('请输入要过滤的群组 ID（多个用英文逗号分隔，留空跳过）: ');
     const groupIds = groupIdsInput ? groupIdsInput.split(',').map(id => id.trim()).filter(id => id) : [];
     
@@ -1018,10 +1041,10 @@ async function interactiveConfig() {
     logger.info('');
     logger.info('步骤 6/6: 文件分类存储');
     const enableOrgChoice = await input.text('是否按文件类型分类存储到子文件夹 (photo/, video/, audio/, file/)? (y/n, 默认: n): ');
-    const enableOrganization = enableOrgChoice.toLowerCase() === 'y' || enableOrgChoice.toLowerCase() === 'yes';
+    const enableOrganization = ['y', 'yes', 'Y', 'YES', 'true', '1'].includes(enableOrgChoice.trim());
     
     // Save configuration
-    tonfig.set('account.apiId', parseInt(apiId));
+    tonfig.set('account.apiId', apiId);
     tonfig.set('account.apiHash', apiHash);
     tonfig.set('account.account', account);
     tonfig.set('groupFilter.mode', filterMode);
@@ -1075,6 +1098,8 @@ async function checkConfig() {
 
     if (!apiId || !apiHash || !account) {
         await interactiveConfig();
+        // Reload configuration after interactive setup
+        await loadConfig();
     }
 }
 
