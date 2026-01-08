@@ -21,10 +21,12 @@
   },
   "dependencies": {
     "@liesauer/tonfig": "^1.0.5",
+    "@types/inquirer": "^8.2.12",
     "async": "^3.2.5",
     "better-sqlite3": "^11.6.0",
     "croner": "^8.0.2",
     "input": "^1.0.1",
+    "inquirer": "^8.2.7",
     "mimetics": "^0.0.8",
     "minimist": "^1.2.8",
     "runes": "^0.4.3",
