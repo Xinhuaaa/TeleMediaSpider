@@ -8,11 +8,18 @@ export interface GroupInfo {
 }
 
 export class MenuSystem {
-    constructor(private logger: Logger) {}
+    constructor(private logger: Logger, private getDownloadStatus?: () => boolean) {}
 
     async showMainMenu(): Promise<string> {
         console.clear();
-        this.logger.info('===== Telegram 媒体下载器 =====\n');
+        const isDownloading = this.getDownloadStatus ? this.getDownloadStatus() : false;
+        
+        this.logger.info('===== Telegram 媒体下载器 =====');
+        if (isDownloading) {
+            this.logger.info('状态: 🟢 下载中...\n');
+        } else {
+            this.logger.info('状态: ⚪ 空闲\n');
+        }
         
         const { choice } = await inquirer.prompt([
             {
@@ -21,9 +28,10 @@ export class MenuSystem {
                 message: '请选择操作:',
                 choices: [
                     { name: '[1] 开始下载 - 从保存的群组列表下载媒体', value: '1' },
-                    { name: '[2] 调整同步群组 - 进入群组管理子菜单', value: '2' },
-                    { name: '[3] 文件类型配置 - 修改下载文件类型', value: '3' },
-                    { name: '[4] 其他设置 - 并发数、文件分类等', value: '4' },
+                    { name: '[2] 停止下载 - 停止当前的下载任务', value: '2' },
+                    { name: '[3] 调整同步群组 - 进入群组管理子菜单', value: '3' },
+                    { name: '[4] 文件类型配置 - 修改下载文件类型', value: '4' },
+                    { name: '[5] 其他设置 - 并发数、文件分类等', value: '5' },
                     { name: '[0] 退出程序', value: '0' },
                 ],
             },

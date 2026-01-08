@@ -719,6 +719,8 @@ const waitQueue: AnnotatedDictionary<{
 let execQueue;
 
 async function mediaSpider() {
+    if (!isDownloading) return;
+    
     await client.connect();
 
     const allowChannels = tonfig.get<string[]>('spider.channels', []);
@@ -1395,7 +1397,7 @@ async function main() {
 
     await checkConfig();
     
-    menuSystem = new MenuSystem(logger);
+    menuSystem = new MenuSystem(logger, () => isDownloading);
 
     const saveRawMessage = tonfig.get<boolean>("spider.saveRawMessage", false);
 
@@ -1514,12 +1516,15 @@ async function main() {
                 await startDownload();
                 break;
             case '2':
-                await handleGroupManagement();
+                await stopDownload();
                 break;
             case '3':
-                await handleFileTypeConfiguration();
+                await handleGroupManagement();
                 break;
             case '4':
+                await handleFileTypeConfiguration();
+                break;
+            case '5':
                 await handleOtherSettings();
                 break;
             case '0':
