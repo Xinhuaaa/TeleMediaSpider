@@ -1,0 +1,109 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Clean build directories
+        run: npx rimraf dist obfuscated
+
+      - name: Build TypeScript
+        run: yarn build
+
+      - name: Copy SQL files
+        run: npx copyfiles -u 1 "src/**/*.sql" dist
+
+      - name: Copy node files
+        run: npx copyfiles -u 1 "src/**/*.node" dist
+
+      - name: Prepare obfuscated directory
+        run: npx copyfiles -u 1 "dist/**/*" obfuscated
+
+      - name: Obfuscate index.js
+        run: |
+          npx javascript-obfuscator \
+            --ignore-imports true \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.75 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.4 \
+            --debug-protection false \
+            --debug-protection-interval 0 \
+            --disable-console-output false \
+            --identifier-names-generator hexadecimal \
+            --log true \
+            --numbers-to-expressions true \
+            --rename-globals false \
+            --self-defending true \
+            --simplify true \
+            --split-strings true \
+            --split-strings-chunk-length 10 \
+            --string-array true \
+            --string-array-calls-transform true \
+            --string-array-calls-transform-threshold 0.75 \
+            --string-array-encoding base64 \
+            --string-array-index-shift true \
+            --string-array-rotate true \
+            --string-array-shuffle true \
+            --string-array-wrappers-count 2 \
+            --string-array-wrappers-chained-calls true \
+            --string-array-wrappers-parameters-max-count 4 \
+            --string-array-wrappers-type function \
+            --string-array-threshold 0.75 \
+            --transform-object-keys true \
+            --unicode-escape-sequence false \
+            dist/index.js \
+            --output obfuscated
+
+      - name: Package executables
+        run: |
+          npx pkg \
+            --no-native-build \
+            --no-bytecode \
+            --public-packages "*" \
+            --public \
+            --compress GZip \
+            package.json \
+            -o output/TeleMediaSpider
+
+      - name: Upload Windows x64 executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: node18-win-x64
+          path: output/TeleMediaSpider-win.exe
+
+      - name: Upload Linux x64 executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: node18-linux-x64
+          path: output/TeleMediaSpider-linux
+
+      - name: Upload macOS x64 executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: node18-macos-x64
+          path: output/TeleMediaSpider-macos
