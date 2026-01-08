@@ -1,6 +1,7 @@
 import { createWriteStream, promises as fs } from 'fs';
 import { Api, TelegramClient } from 'telegram';
 import { Logger } from 'telegram/extensions/Logger';
+import bigInt from 'big-integer';
 
 /**
  * Configuration for accelerated download
@@ -13,7 +14,7 @@ export interface DownloadConfig {
 }
 
 /**
- * Progress callback function type
+ * Progress callback function type - matches Telegram API signature
  */
 export type ProgressCallback = (downloaded: bigInt.BigInteger, total: bigInt.BigInteger) => void;
 
@@ -192,8 +193,8 @@ export class AcceleratedDownloader {
         const updateProgress = () => {
             if (progressCallback) {
                 progressCallback(
-                    BigInt(downloadedBytes) as any,
-                    BigInt(totalSize) as any
+                    bigInt(downloadedBytes),
+                    bigInt(totalSize)
                 );
             }
         };
@@ -204,7 +205,7 @@ export class AcceleratedDownloader {
                 const result = await this.client.invoke(
                     new Api.upload.GetFile({
                         location: location,
-                        offset: BigInt(task.offset) as any,
+                        offset: bigInt(task.offset),
                         limit: task.limit,
                         precise: true,
                     })
@@ -325,8 +326,8 @@ export class AcceleratedDownloader {
         const updateProgress = () => {
             if (progressCallback) {
                 progressCallback(
-                    BigInt(downloadedBytes) as any,
-                    BigInt(totalSize) as any
+                    bigInt(downloadedBytes),
+                    bigInt(totalSize)
                 );
             }
         };
@@ -343,7 +344,7 @@ export class AcceleratedDownloader {
                     const result = await this.client.invoke(
                         new Api.upload.GetFile({
                             location: location,
-                            offset: BigInt(offset) as any,
+                            offset: bigInt(offset),
                             limit: limit,
                             precise: true,
                         })
