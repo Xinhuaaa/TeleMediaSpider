@@ -8,34 +8,34 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-      
+
       - name: Enable Corepack
         run: corepack enable
-      
+
       - name: Install dependencies
         run: yarn install --immutable
-      
+
       - name: Build TypeScript
         run: yarn build
-      
+
       - name: Copy SQL files
         run: npx copyfiles -u 1 "src/**/*.sql" dist
-      
+
       - name: Copy node files
         run: npx copyfiles -u 1 "src/**/*.node" dist
-      
+
       - name: Prepare obfuscated directory
         run: npx copyfiles -u 1 "dist/**/*" obfuscated
-      
+
       - name: Obfuscate index.js
         run: |
           npx javascript-obfuscator \
@@ -72,7 +72,7 @@ jobs:
             --unicode-escape-sequence false \
             dist/index.js \
             --output obfuscated
-      
+
       - name: Package executables
         run: |
           npx pkg \
@@ -83,19 +83,19 @@ jobs:
             --compress GZip \
             package.json \
             -o output/TeleMediaSpider
-      
+
       - name: Upload Windows x64 executable
         uses: actions/upload-artifact@v4
         with:
           name: node18-win-x64
           path: output/TeleMediaSpider-win.exe
-      
+
       - name: Upload Linux x64 executable
         uses: actions/upload-artifact@v4
         with:
           name: node18-linux-x64
           path: output/TeleMediaSpider-linux
-      
+
       - name: Upload macOS x64 executable
         uses: actions/upload-artifact@v4
         with:
