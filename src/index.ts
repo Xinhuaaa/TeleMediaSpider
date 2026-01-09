@@ -1232,10 +1232,6 @@ async function main() {
 
     let { apiId, apiHash, account, session, deviceModel, systemVersion, appVersion, langCode, systemLangCode } = getAccountConfig();
 
-    if (!session) {
-        logger.info('请按提示进行登录');
-    }
-
     const proxy = getProxyConfig();
 
     client = new TelegramClient(new StringSession(session), apiId, apiHash, {
@@ -1250,26 +1246,41 @@ async function main() {
         systemLangCode: systemLangCode || "en-US",
     });
 
-    await client.start({
-        phoneNumber: account,
-        password: async () => await input.text("请输入密码："),
-        phoneCode: async () => await input.text("请输入验证码："),
-        onError: (err) => logger.error(err.message),
-    });
+    // Connect first to check if existing session is valid
+    await client.connect();
 
-    if (!session) {
-        session = <string><unknown>client.session.save();
-        tonfig.set("account.session", session);
+    // Check if already authorized with existing session
+    let isAuthorized = false;
+    try {
+        isAuthorized = await client.checkAuthorization();
+    } catch (e) {
+        // If authorization check fails, we'll need to re-login
+        logger.warn(`检查登录状态失败，将重新登录: ${e instanceof Error ? e.message : e}`);
+    }
 
-        await tonfig.save();
+    if (!isAuthorized) {
+        // Only prompt for login if not already authorized
+        logger.info('请按提示进行登录');
+        
+        await client.start({
+            phoneNumber: account,
+            password: async () => await input.text("请输入密码："),
+            phoneCode: async () => await input.text("请输入验证码："),
+            onError: (err) => logger.error(err.message),
+        });
 
-        if (session) {
+        // Save the new session
+        const newSession = <string><unknown>client.session.save();
+        if (newSession) {
+            tonfig.set("account.session", newSession);
+            await tonfig.save();
             logger.info('登录成功，登录状态会保持');
         } else {
             logger.info('登录失败');
-
             await waitForever();
         }
+    } else {
+        logger.info('使用已保存的登录状态');
     }
 
     // Initialize accelerated downloader
