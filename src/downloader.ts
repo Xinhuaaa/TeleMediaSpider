@@ -258,8 +258,8 @@ export class AcceleratedDownloader {
                         this.logger.info(`File lives in DC ${error.newDc}, switching sender`);
                     }
                     // Get sender for the correct DC and retry
+                    // Don't decrement activeDownloads here - let finally handle it after retry completes
                     sender = await this.client.getSender(error.newDc);
-                    activeDownloads--;
                     return await downloadChunk(task);
                 }
 
@@ -270,7 +270,7 @@ export class AcceleratedDownloader {
                         this.logger.warn(`Chunk at offset ${task.offset} failed, retrying (${task.retries}/${this.config.maxRetries})`);
                     }
                     await this.sleep(1000 * task.retries); // Exponential backoff
-                    activeDownloads--;
+                    // Don't decrement activeDownloads here - let finally handle it after retry completes
                     return await downloadChunk(task);
                 } else {
                     throw new Error(`Failed to download chunk at offset ${task.offset} after ${this.config.maxRetries} retries: ${error}`);
@@ -464,8 +464,8 @@ export class AcceleratedDownloader {
                         this.logger.info(`File lives in DC ${error.newDc}, switching sender`);
                     }
                     // Get sender for the correct DC and retry
+                    // Don't decrement activeDownloads here - let finally handle it after retry completes
                     sender = await this.client.getSender(error.newDc);
-                    activeDownloads--;
                     return await downloadChunk(task);
                 }
 
@@ -476,7 +476,7 @@ export class AcceleratedDownloader {
                         this.logger.warn(`Chunk at offset ${task.offset} failed, retrying (${task.retries}/${this.config.maxRetries})`);
                     }
                     await this.sleep(1000 * task.retries);
-                    activeDownloads--;
+                    // Don't decrement activeDownloads here - let finally handle it after retry completes
                     return await downloadChunk(task);
                 } else {
                     writeError = new Error(`Failed to download chunk at offset ${task.offset} after ${this.config.maxRetries} retries: ${error}`);
