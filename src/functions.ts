@@ -23,6 +23,12 @@ export function AppDir() {
 }
 
 export function DataDir() {
+    // Support custom data directory via environment variable
+    // This allows users to preserve their session and config across updates
+    const customDataDir = process.env.TELE_SPIDER_DATA_DIR;
+    if (customDataDir) {
+        return customDataDir;
+    }
     return AppDir() + '/data';
 }
 
