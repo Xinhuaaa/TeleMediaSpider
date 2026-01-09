@@ -2,7 +2,6 @@ import queue from 'async/queue';
 import { Statement } from 'better-sqlite3';
 import Cron from 'croner';
 import { mkdirSync, writeFileSync } from 'fs';
-import { writeFile } from 'fs/promises';
 import input from 'input';
 import mimetics from 'mimetics';
 import minimist from 'minimist';
@@ -467,13 +466,11 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
         channelInfo.fileName = fullFileName;
         absSavePath = `${dir}/${fullFileName}`;
 
-        // Download the media
-        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
+        // Download the media directly to file (memory-efficient, avoids loading entire file into memory)
+        await acceleratedDownloader.downloadMediaToFile(message.media, absSavePath, (bytes, total) => {
             channelInfo.downloadedBytes = bytes;
             channelInfo.totalBytes = total;
         });
-
-        await writeFile(absSavePath, buffer);
     };
 
     // Download each media type using the unified function
