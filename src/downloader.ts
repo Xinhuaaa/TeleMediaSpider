@@ -360,6 +360,7 @@ export class AcceleratedDownloader {
         let writtenBytes = 0;
         let nextWriteOffset = 0;
         let activeDownloads = 0;
+        let bufferedChunks = 0; // Track number of chunks in memory
         const maxConcurrent = threads;
         let writeError: Error | null = null;
 
@@ -373,9 +374,10 @@ export class AcceleratedDownloader {
             }
         };
 
-        // Handle backpressure - wait for drain event
+        // Handle backpressure - wait for drain event if too many chunks are buffered
         const waitForDrain = (): Promise<void> => {
-            if (writeStream.writableHighWaterMark && writtenBytes - downloadedBytes > writeStream.writableHighWaterMark) {
+            const bufferedSize = bufferedChunks * chunkSize;
+            if (writeStream.writableHighWaterMark && bufferedSize > writeStream.writableHighWaterMark) {
                 return new Promise((resolve) => {
                     writeStream.once('drain', resolve);
                 });
@@ -393,6 +395,7 @@ export class AcceleratedDownloader {
                 writtenBytes += buffer.length;
                 
                 delete buffers[nextWriteOffset]; // Free memory immediately
+                bufferedChunks--; // Decrement buffer count
                 nextWriteOffset += chunkSize;
 
                 if (!canContinue) {
@@ -416,6 +419,7 @@ export class AcceleratedDownloader {
 
                 if (result instanceof Api.upload.File) {
                     buffers[task.offset] = result.bytes;
+                    bufferedChunks++; // Increment buffer count
                     downloadedBytes += result.bytes.length;
                     updateProgress();
                     
@@ -447,7 +451,7 @@ export class AcceleratedDownloader {
             if (writeError) break;
             
             // Wait if we've hit max concurrent downloads or too many buffered chunks
-            while ((activeDownloads >= maxConcurrent || Object.keys(buffers).length >= maxConcurrent * 2) && !writeError) {
+            while ((activeDownloads >= maxConcurrent || bufferedChunks >= maxConcurrent * 2) && !writeError) {
                 await this.sleep(50);
                 await writeOrderedChunks(); // Try to write while waiting
             }

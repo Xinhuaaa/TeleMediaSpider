@@ -91,6 +91,22 @@ export class FolderStructureManager {
     }
 
     /**
+     * Check if filename has an extension
+     * @param filename Filename to check
+     * @returns true if filename has an extension
+     */
+    private hasExtension(filename: string): boolean {
+        if (!filename) return false;
+        const lastDotIndex = filename.lastIndexOf('.');
+        const lastSlashIndex = Math.max(
+            filename.lastIndexOf('/'),
+            filename.lastIndexOf('\\')
+        );
+        // Extension exists if dot comes after the last slash/backslash and is not the first character
+        return lastDotIndex > lastSlashIndex && lastDotIndex > 0;
+    }
+
+    /**
      * Build complete file path
      * @param options File options
      * @param extension File extension (without dot)
@@ -104,8 +120,8 @@ export class FolderStructureManager {
         const filename = this.buildFilename(options);
         
         // If raw filename exists and already has extension, don't add another
-        const hasExtension = options.rawFileName && options.rawFileName.includes('.');
-        const fullFilename = hasExtension ? filename : `${filename}.${extension}`;
+        const hasExt = options.rawFileName && this.hasExtension(options.rawFileName);
+        const fullFilename = hasExt ? filename : `${filename}.${extension}`;
         
         return `${dir}/${fullFilename}`;
     }

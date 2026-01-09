@@ -461,8 +461,8 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
         const filename = folderStructureManager.buildFilename({ ...folderOptions, rawFileName });
         
         // Determine if filename already has extension
-        const hasExtension = rawFileName && rawFileName.includes('.');
-        fullFileName = hasExtension ? filename : `${filename}.${ext || defaultExtension}`;
+        const hasExt = rawFileName && rawFileName.lastIndexOf('.') > Math.max(rawFileName.lastIndexOf('/'), rawFileName.lastIndexOf('\\'));
+        fullFileName = hasExt ? filename : `${filename}.${ext || defaultExtension}`;
 
         channelInfo.fileName = fullFileName;
         absSavePath = `${dir}/${fullFileName}`;

@@ -65,7 +65,10 @@ class UIStateManager {
             try {
                 callback(state);
             } catch (error) {
-                // Silently ignore errors in callbacks
+                // Log errors in callbacks for debugging, but continue execution
+                if (typeof console !== 'undefined' && console.error) {
+                    console.error('Error in UI state change callback:', error);
+                }
             }
         }
     }
