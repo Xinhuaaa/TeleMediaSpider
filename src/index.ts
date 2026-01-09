@@ -48,8 +48,11 @@ class MyLogger extends Logger {
 
         const log = color + this.format(message, level, messageFormat) + this['colors'].end;
 
-        // Don't output logs to console when in menu state or when uiTimer is active
-        if (!uiStateManager.isInMenu() && (!uiTimer || uiTimer['_states'].paused)) {
+        // Output logs to console when:
+        // 1. In menu state (menu will handle display)
+        // 2. uiTimer is not active (paused or not started)
+        // When uiTimer is active and not in menu, render() handles log display
+        if (uiStateManager.isInMenu() || !uiTimer || uiTimer['_states'].paused) {
             console.log(log);
         }
 
