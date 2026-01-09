@@ -1,6 +1,8 @@
 import { createWriteStream, promises as fs } from 'fs';
 import { Api, TelegramClient } from 'telegram';
 import { Logger } from 'telegram/extensions/Logger';
+import { FileMigrateError } from 'telegram/errors';
+import { MTProtoSender } from 'telegram/network';
 import bigInt from 'big-integer';
 
 /**
@@ -201,6 +203,12 @@ export class AcceleratedDownloader {
         let activeDownloads = 0;
         const maxConcurrent = threads;
 
+        // Sender for the correct DC (may change if file is on different DC)
+        let sender: MTProtoSender | undefined;
+        if (dcId !== undefined) {
+            sender = await this.client.getSender(dcId);
+        }
+
         // Progress tracking
         const updateProgress = () => {
             if (progressCallback) {
@@ -225,14 +233,17 @@ export class AcceleratedDownloader {
         const downloadChunk = async (task: ChunkTask): Promise<void> => {
             activeDownloads++;
             try {
-                const result = await this.client.invoke(
-                    new Api.upload.GetFile({
-                        location: location,
-                        offset: bigInt(task.offset),
-                        limit: task.limit,
-                        precise: true,
-                    })
-                );
+                const request = new Api.upload.GetFile({
+                    location: location,
+                    offset: bigInt(task.offset),
+                    limit: task.limit,
+                    precise: true,
+                });
+
+                // Use sender if available (for correct DC), otherwise use default client
+                const result = sender
+                    ? await this.client.invokeWithSender(request, sender)
+                    : await this.client.invoke(request);
 
                 if (result instanceof Api.upload.File) {
                     buffers[task.offset] = result.bytes;
@@ -241,7 +252,18 @@ export class AcceleratedDownloader {
                     processOrderedChunks();
                 }
             } catch (error) {
-                // Retry logic
+                // Handle FileMigrateError - file is on a different DC
+                if (error instanceof FileMigrateError) {
+                    if (this.logger) {
+                        this.logger.info(`File lives in DC ${error.newDc}, switching sender`);
+                    }
+                    // Get sender for the correct DC and retry
+                    sender = await this.client.getSender(error.newDc);
+                    activeDownloads--;
+                    return await downloadChunk(task);
+                }
+
+                // Retry logic for other errors
                 if (task.retries < this.config.maxRetries) {
                     task.retries++;
                     if (this.logger) {
@@ -364,6 +386,12 @@ export class AcceleratedDownloader {
         const maxConcurrent = threads;
         let writeError: Error | null = null;
 
+        // Sender for the correct DC (may change if file is on different DC)
+        let sender: MTProtoSender | undefined;
+        if (dcId !== undefined) {
+            sender = await this.client.getSender(dcId);
+        }
+
         // Progress tracking
         const updateProgress = () => {
             if (progressCallback) {
@@ -408,14 +436,17 @@ export class AcceleratedDownloader {
         const downloadChunk = async (task: ChunkTask): Promise<void> => {
             activeDownloads++;
             try {
-                const result = await this.client.invoke(
-                    new Api.upload.GetFile({
-                        location: location,
-                        offset: bigInt(task.offset),
-                        limit: task.limit,
-                        precise: true,
-                    })
-                );
+                const request = new Api.upload.GetFile({
+                    location: location,
+                    offset: bigInt(task.offset),
+                    limit: task.limit,
+                    precise: true,
+                });
+
+                // Use sender if available (for correct DC), otherwise use default client
+                const result = sender
+                    ? await this.client.invokeWithSender(request, sender)
+                    : await this.client.invoke(request);
 
                 if (result instanceof Api.upload.File) {
                     buffers[task.offset] = result.bytes;
@@ -427,6 +458,18 @@ export class AcceleratedDownloader {
                     await writeOrderedChunks();
                 }
             } catch (error) {
+                // Handle FileMigrateError - file is on a different DC
+                if (error instanceof FileMigrateError) {
+                    if (this.logger) {
+                        this.logger.info(`File lives in DC ${error.newDc}, switching sender`);
+                    }
+                    // Get sender for the correct DC and retry
+                    sender = await this.client.getSender(error.newDc);
+                    activeDownloads--;
+                    return await downloadChunk(task);
+                }
+
+                // Retry logic for other errors
                 if (task.retries < this.config.maxRetries) {
                     task.retries++;
                     if (this.logger) {
