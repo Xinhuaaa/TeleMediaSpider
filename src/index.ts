@@ -22,6 +22,9 @@ import {
 import { MenuSystem, GroupInfo } from './menu';
 import { AnnotatedDictionary, UnwrapAnnotatedDictionary } from './types';
 import { AcceleratedDownloader, DownloadConfig } from './downloader';
+import { uiStateManager } from './uiStateManager';
+import { globalEventBus } from './eventBus';
+import { FolderStructureManager } from './folderStructureManager';
 
 const argv = minimist(process.argv.slice(2));
 
@@ -46,7 +49,8 @@ class MyLogger extends Logger {
 
         const log = color + this.format(message, level, messageFormat) + this['colors'].end;
 
-        if (!uiTimer || uiTimer['_states'].paused) {
+        // Don't output logs to console when in menu state or when uiTimer is active
+        if (!uiStateManager.isInMenu() && (!uiTimer || uiTimer['_states'].paused)) {
             console.log(log);
         }
 
@@ -413,255 +417,80 @@ async function downloadChannelMedia(client: TelegramClient, channelId: string, m
     let fullFileName = '';
     let absSavePath = '';
 
-    // Use channel title as folder name, fallback to channelId if title is empty
-    const folderName = sanitizeFolderName(channelInfo.channelTitle) || channelId;
-
-    if (photo && (!medias || medias.includes('photo'))) {
+    // Helper function to download a specific media type
+    const downloadMedia = async (
+        mediaType: 'photo' | 'video' | 'audio' | 'file',
+        defaultExtension: string
+    ) => {
         let media = message.media as Api.MessageMediaDocument;
 
-        if (!shouldDownload(channelId, media, "photo")) {
+        if (!shouldDownload(channelId, media, mediaType)) {
             return;
         }
 
-        let dir = DataDir() + '/' + folderName;
-
-        let filename = `${messageId}`;
+        // Get extension from mime type or filename
         let ext = '';
-        let noExt = false;
-
-        if (topicId) {
-            dir += `/_${topicId}`;
-        }
-
-        if (groupedId) {
-            if (groupMessage) {
-                dir += `/${groupedId}`;
-            } else {
-                filename = `${groupedId}_` + filename;
-            }
-        }
-
-        // Apply file organization
-        dir = getOrganizedDir(dir, 'photo');
-
-        mkdirSync(dir, { recursive: true });
-
         if (message?.file) {
             ext = Object.keys(mimetics.mimeTypeMap).find(v => {
                 return mimetics.mimeTypeMap[v] == message.file.mimeType;
             }) || '';
         }
 
+        // Get raw filename if exists
         if (media?.document) {
             const document = media.document as Api.Document;
-
             const filenameAttr = document.attributes.find(v => v.className == "DocumentAttributeFilename") as Api.DocumentAttributeFilename;
-
             if (filenameAttr && filenameAttr.fileName) {
                 rawFileName = filenameAttr.fileName;
-                filename += `_${filenameAttr.fileName}`;
-                noExt = true;
             }
         }
 
-        fullFileName = noExt ? filename : `${filename}.${ext || 'jpg'}`;
+        // Build folder path and filename using FolderStructureManager
+        const folderOptions = {
+            channelId,
+            channelTitle: channelInfo.channelTitle,
+            topicId,
+            groupedId,
+            messageId,
+            mediaType,
+        };
+
+        const dir = folderStructureManager.buildFolderPath(folderOptions);
+        mkdirSync(dir, { recursive: true });
+
+        const filename = folderStructureManager.buildFilename({ ...folderOptions, rawFileName });
+        
+        // Determine if filename already has extension
+        const hasExt = rawFileName && rawFileName.lastIndexOf('.') > Math.max(rawFileName.lastIndexOf('/'), rawFileName.lastIndexOf('\\'));
+        fullFileName = hasExt ? filename : `${filename}.${ext || defaultExtension}`;
 
         channelInfo.fileName = fullFileName;
-
         absSavePath = `${dir}/${fullFileName}`;
 
+        // Download the media
         const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
             channelInfo.downloadedBytes = bytes;
             channelInfo.totalBytes = total;
         });
 
         await writeFile(absSavePath, buffer);
+    };
+
+    // Download each media type using the unified function
+    if (photo && (!medias || medias.includes('photo'))) {
+        await downloadMedia('photo', 'jpg');
     }
 
     if (video && (!medias || medias.includes('video'))) {
-        let media = message.media as Api.MessageMediaDocument;
-
-        if (!shouldDownload(channelId, media, "video")) {
-            return;
-        }
-
-        let dir = DataDir() + '/' + folderName;
-
-        let filename = `${messageId}`;
-        let ext = '';
-        let noExt = false;
-
-        if (topicId) {
-            dir += `/_${topicId}`;
-        }
-
-        if (groupedId) {
-            if (groupMessage) {
-                dir += `/${groupedId}`;
-            } else {
-                filename = `${groupedId}_` + filename;
-            }
-        }
-
-        // Apply file organization
-        dir = getOrganizedDir(dir, 'video');
-
-        mkdirSync(dir, { recursive: true });
-
-        if (message?.file) {
-            ext = Object.keys(mimetics.mimeTypeMap).find(v => {
-                return mimetics.mimeTypeMap[v] == message.file.mimeType;
-            }) || '';
-        }
-
-        if (media?.document) {
-            const document = media.document as Api.Document;
-
-            const filenameAttr = document.attributes.find(v => v.className == "DocumentAttributeFilename") as Api.DocumentAttributeFilename;
-
-            if (filenameAttr && filenameAttr.fileName) {
-                rawFileName = filenameAttr.fileName;
-                filename += `_${filenameAttr.fileName}`;
-                noExt = true;
-            }
-        }
-
-        fullFileName = noExt ? filename : `${filename}.${ext || 'mp4'}`;
-
-        channelInfo.fileName = fullFileName;
-
-        absSavePath = `${dir}/${fullFileName}`;
-
-        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
-            channelInfo.downloadedBytes = bytes;
-            channelInfo.totalBytes = total;
-        });
-
-        await writeFile(absSavePath, buffer);
+        await downloadMedia('video', 'mp4');
     }
 
     if (audio && (!medias || medias.includes('audio'))) {
-        let media = message.media as Api.MessageMediaDocument;
-
-        if (!shouldDownload(channelId, media, "audio")) {
-            return;
-        }
-
-        let dir = DataDir() + '/' + folderName;
-
-        let filename = `${messageId}`;
-        let ext = '';
-        let noExt = false;
-
-        if (topicId) {
-            dir += `/_${topicId}`;
-        }
-
-        if (groupedId) {
-            if (groupMessage) {
-                dir += `/${groupedId}`;
-            } else {
-                filename = `${groupedId}_` + filename;
-            }
-        }
-
-        // Apply file organization
-        dir = getOrganizedDir(dir, 'audio');
-
-        mkdirSync(dir, { recursive: true });
-
-        if (message?.file) {
-            ext = Object.keys(mimetics.mimeTypeMap).find(v => {
-                return mimetics.mimeTypeMap[v] == message.file.mimeType;
-            }) || '';
-        }
-
-        if (media?.document) {
-            const document = media.document as Api.Document;
-
-            const filenameAttr = document.attributes.find(v => v.className == "DocumentAttributeFilename") as Api.DocumentAttributeFilename;
-
-            if (filenameAttr && filenameAttr.fileName) {
-                rawFileName = filenameAttr.fileName;
-                filename += `_${filenameAttr.fileName}`;
-                noExt = true;
-            }
-        }
-
-        fullFileName = noExt ? filename : `${filename}.${ext || 'mp3'}`;
-
-        channelInfo.fileName = fullFileName;
-
-        absSavePath = `${dir}/${fullFileName}`;
-
-        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
-            channelInfo.downloadedBytes = bytes;
-            channelInfo.totalBytes = total;
-        });
-
-        await writeFile(absSavePath, buffer);
+        await downloadMedia('audio', 'mp3');
     }
 
     if (file && (!medias || medias.includes('file'))) {
-        let media = message.media as Api.MessageMediaDocument;
-
-        if (!shouldDownload(channelId, media, "file")) {
-            return;
-        }
-
-        let dir = DataDir() + '/' + folderName;
-
-        let filename = `${messageId}`;
-        let ext = '';
-        let noExt = false;
-
-        if (topicId) {
-            dir += `/_${topicId}`;
-        }
-
-        if (groupedId) {
-            if (groupMessage) {
-                dir += `/${groupedId}`;
-            } else {
-                filename = `${groupedId}_` + filename;
-            }
-        }
-
-        // Apply file organization
-        dir = getOrganizedDir(dir, 'file');
-
-        mkdirSync(dir, { recursive: true });
-
-        if (message?.file) {
-            ext = Object.keys(mimetics.mimeTypeMap).find(v => {
-                return mimetics.mimeTypeMap[v] == message.file.mimeType;
-            }) || '';
-        }
-
-        if (media?.document) {
-            const document = media.document as Api.Document;
-
-            const filenameAttr = document.attributes.find(v => v.className == "DocumentAttributeFilename") as Api.DocumentAttributeFilename;
-
-            if (filenameAttr && filenameAttr.fileName) {
-                rawFileName = filenameAttr.fileName;
-                filename += `_${filenameAttr.fileName}`;
-                noExt = true;
-            }
-        }
-
-        fullFileName = noExt ? filename : `${filename}.${ext || 'dat'}`;
-
-        channelInfo.fileName = fullFileName;
-
-        absSavePath = `${dir}/${fullFileName}`;
-
-        const buffer = await acceleratedDownloader.downloadMedia(message.media, (bytes, total) => {
-            channelInfo.downloadedBytes = bytes;
-            channelInfo.totalBytes = total;
-        });
-
-        await writeFile(absSavePath, buffer);
+        await downloadMedia('file', 'dat');
     }
 
     if (saveRawMessage && (rawFileName || absSavePath)) {
@@ -684,6 +513,7 @@ let client: TelegramClient;
 let tonfig: Tonfig;
 let menuSystem: MenuSystem;
 let acceleratedDownloader: AcceleratedDownloader;
+let folderStructureManager: FolderStructureManager;
 
 let uiTimer: Cron;
 let mainTimer: Cron;
@@ -808,6 +638,11 @@ async function mediaSpider() {
 }
 
 async function render() {
+    // Don't render when in menu state
+    if (uiStateManager.isInMenu()) {
+        return;
+    }
+
     console.clear();
 
     if (listChannels) {
@@ -1255,17 +1090,6 @@ function shouldProcessChannel(channelId: string): boolean {
     return allowChannels.includes(channelId);
 }
 
-function getOrganizedDir(baseDir: string, mediaType: 'photo' | 'video' | 'audio' | 'file'): string {
-    const fileOrgEnabled = tonfig.get<boolean>('fileOrganization.enabled', false);
-    const createSubfolders = tonfig.get<boolean>('fileOrganization.createSubfolders', true);
-    
-    if (fileOrgEnabled && createSubfolders) {
-        return `${baseDir}/${mediaType}`;
-    }
-    
-    return baseDir;
-}
-
 async function checkConfig() {
     await loadConfig();
 
@@ -1333,7 +1157,7 @@ async function startDownload() {
                 })[0];
 
                 return !!channelInfo;
-            }, 100);
+            }, 1000);
 
             channelInfo.downloading = true;
 
@@ -1354,6 +1178,9 @@ async function startDownload() {
             }).finally(() => {
                 channelInfo.downloading = false;
                 channelInfo.lastDownloadTime = Date.now();
+                
+                // Emit event to notify that download slot is available
+                globalEventBus.emitEvent('download:complete');
 
                 callback();
             });
@@ -1396,6 +1223,9 @@ async function main() {
     await checkConfig();
     
     menuSystem = new MenuSystem(logger, () => isDownloading);
+    
+    // Initialize folder structure manager
+    folderStructureManager = new FolderStructureManager(tonfig);
 
     const saveRawMessage = tonfig.get<boolean>("spider.saveRawMessage", false);
 

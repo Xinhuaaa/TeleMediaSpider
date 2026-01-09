@@ -173,7 +173,9 @@ export class AcceleratedDownloader {
     }
 
     /**
-     * Download file using multiple concurrent connections
+     * Download file using multiple concurrent connections (memory-optimized)
+     * Uses ordered streaming to write chunks to memory as they complete
+     * Limits memory usage to approximately chunkSize * threads
      */
     private async downloadFileAccelerated(
         location: Api.TypeInputFileLocation,
@@ -191,9 +193,13 @@ export class AcceleratedDownloader {
             chunks.push({ offset, limit, retries: 0 });
         }
 
-        // Buffer to store downloaded chunks
+        // Buffer to store downloaded chunks (limited by concurrent threads)
         const buffers: { [key: number]: Buffer } = {};
+        const orderedBuffers: Buffer[] = [];
         let downloadedBytes = 0;
+        let nextExpectedOffset = 0;
+        let activeDownloads = 0;
+        const maxConcurrent = threads;
 
         // Progress tracking
         const updateProgress = () => {
@@ -205,8 +211,19 @@ export class AcceleratedDownloader {
             }
         };
 
+        // Process ordered chunks and free memory
+        const processOrderedChunks = () => {
+            while (buffers[nextExpectedOffset]) {
+                const buffer = buffers[nextExpectedOffset];
+                orderedBuffers.push(buffer);
+                delete buffers[nextExpectedOffset]; // Free memory immediately
+                nextExpectedOffset += chunkSize;
+            }
+        };
+
         // Download chunks with concurrency control
         const downloadChunk = async (task: ChunkTask): Promise<void> => {
+            activeDownloads++;
             try {
                 const result = await this.client.invoke(
                     new Api.upload.GetFile({
@@ -221,6 +238,7 @@ export class AcceleratedDownloader {
                     buffers[task.offset] = result.bytes;
                     downloadedBytes += result.bytes.length;
                     updateProgress();
+                    processOrderedChunks();
                 }
             } catch (error) {
                 // Retry logic
@@ -230,32 +248,34 @@ export class AcceleratedDownloader {
                         this.logger.warn(`Chunk at offset ${task.offset} failed, retrying (${task.retries}/${this.config.maxRetries})`);
                     }
                     await this.sleep(1000 * task.retries); // Exponential backoff
+                    activeDownloads--;
                     return await downloadChunk(task);
                 } else {
                     throw new Error(`Failed to download chunk at offset ${task.offset} after ${this.config.maxRetries} retries: ${error}`);
                 }
+            } finally {
+                activeDownloads--;
             }
         };
 
-        // Process chunks in parallel with concurrency limit
-        const processBatch = async (batch: ChunkTask[]) => {
-            await Promise.all(batch.map(task => downloadChunk(task)));
-        };
-
-        // Download in batches
-        for (let i = 0; i < chunks.length; i += threads) {
-            const batch = chunks.slice(i, i + threads);
-            await processBatch(batch);
+        // Download all chunks with concurrency control
+        const downloadPromises: Promise<void>[] = [];
+        for (const chunk of chunks) {
+            // Wait if we've hit max concurrent downloads
+            while (activeDownloads >= maxConcurrent) {
+                await this.sleep(50);
+            }
+            downloadPromises.push(downloadChunk(chunk));
         }
 
-        // Combine all chunks into a single buffer
-        const sortedOffsets = Object.keys(buffers)
-            .map(k => parseInt(k))
-            .sort((a, b) => a - b);
+        // Wait for all downloads to complete
+        await Promise.all(downloadPromises);
 
-        const finalBuffer = Buffer.concat(
-            sortedOffsets.map(offset => buffers[offset])
-        );
+        // Ensure all ordered chunks are processed
+        processOrderedChunks();
+
+        // Combine all chunks into a single buffer
+        const finalBuffer = Buffer.concat(orderedBuffers);
 
         return finalBuffer;
     }
@@ -313,7 +333,8 @@ export class AcceleratedDownloader {
     }
 
     /**
-     * Download file directly to stream (most memory-efficient)
+     * Download file directly to stream with concurrent downloads and backpressure handling
+     * Most memory-efficient approach for large files
      */
     private async downloadFileToStream(
         location: Api.TypeInputFileLocation,
@@ -326,7 +347,22 @@ export class AcceleratedDownloader {
         const threads = Math.min(this.config.downloadThreads, 8);
         const chunkSize = this.config.chunkSize;
 
+        // Calculate chunks
+        const chunks: ChunkTask[] = [];
+        for (let offset = 0; offset < totalSize; offset += chunkSize) {
+            const limit = Math.min(chunkSize, totalSize - offset);
+            chunks.push({ offset, limit, retries: 0 });
+        }
+
+        // Buffer for ordering chunks (limit memory usage)
+        const buffers: { [key: number]: Buffer } = {};
         let downloadedBytes = 0;
+        let writtenBytes = 0;
+        let nextWriteOffset = 0;
+        let activeDownloads = 0;
+        let bufferedChunks = 0; // Track number of chunks in memory
+        const maxConcurrent = threads;
+        let writeError: Error | null = null;
 
         // Progress tracking
         const updateProgress = () => {
@@ -338,50 +374,113 @@ export class AcceleratedDownloader {
             }
         };
 
-        // For streaming, we need to download chunks sequentially to maintain order
-        // But we can still benefit from retry logic and progress tracking
-        for (let offset = 0; offset < totalSize; offset += chunkSize) {
-            const limit = Math.min(chunkSize, totalSize - offset);
-            let retries = 0;
-            let success = false;
+        // Handle backpressure - wait for drain event if too many chunks are buffered
+        const waitForDrain = (): Promise<void> => {
+            const bufferedSize = bufferedChunks * chunkSize;
+            if (writeStream.writableHighWaterMark && bufferedSize > writeStream.writableHighWaterMark) {
+                return new Promise((resolve) => {
+                    writeStream.once('drain', resolve);
+                });
+            }
+            return Promise.resolve();
+        };
 
-            while (!success && retries <= this.config.maxRetries) {
-                try {
-                    const result = await this.client.invoke(
-                        new Api.upload.GetFile({
-                            location: location,
-                            offset: bigInt(offset),
-                            limit: limit,
-                            precise: true,
-                        })
-                    );
+        // Write ordered chunks to stream
+        const writeOrderedChunks = async () => {
+            while (buffers[nextWriteOffset] && !writeError) {
+                const buffer = buffers[nextWriteOffset];
+                
+                // Handle backpressure
+                const canContinue = writeStream.write(buffer);
+                writtenBytes += buffer.length;
+                
+                delete buffers[nextWriteOffset]; // Free memory immediately
+                bufferedChunks--; // Decrement buffer count
+                nextWriteOffset += chunkSize;
 
-                    if (result instanceof Api.upload.File) {
-                        writeStream.write(result.bytes);
-                        downloadedBytes += result.bytes.length;
-                        updateProgress();
-                        success = true;
-                    }
-                } catch (error) {
-                    retries++;
-                    if (retries > this.config.maxRetries) {
-                        writeStream.end();
-                        throw new Error(`Failed to download chunk at offset ${offset} after ${this.config.maxRetries} retries: ${error}`);
-                    }
-                    if (this.logger) {
-                        this.logger.warn(`Chunk at offset ${offset} failed, retrying (${retries}/${this.config.maxRetries})`);
-                    }
-                    await this.sleep(1000 * retries);
+                if (!canContinue) {
+                    await waitForDrain();
                 }
             }
+        };
+
+        // Download chunk with retry logic
+        const downloadChunk = async (task: ChunkTask): Promise<void> => {
+            activeDownloads++;
+            try {
+                const result = await this.client.invoke(
+                    new Api.upload.GetFile({
+                        location: location,
+                        offset: bigInt(task.offset),
+                        limit: task.limit,
+                        precise: true,
+                    })
+                );
+
+                if (result instanceof Api.upload.File) {
+                    buffers[task.offset] = result.bytes;
+                    bufferedChunks++; // Increment buffer count
+                    downloadedBytes += result.bytes.length;
+                    updateProgress();
+                    
+                    // Try to write ordered chunks
+                    await writeOrderedChunks();
+                }
+            } catch (error) {
+                if (task.retries < this.config.maxRetries) {
+                    task.retries++;
+                    if (this.logger) {
+                        this.logger.warn(`Chunk at offset ${task.offset} failed, retrying (${task.retries}/${this.config.maxRetries})`);
+                    }
+                    await this.sleep(1000 * task.retries);
+                    activeDownloads--;
+                    return await downloadChunk(task);
+                } else {
+                    writeError = new Error(`Failed to download chunk at offset ${task.offset} after ${this.config.maxRetries} retries: ${error}`);
+                    throw writeError;
+                }
+            } finally {
+                activeDownloads--;
+            }
+        };
+
+        // Download all chunks with concurrency control
+        const downloadPromises: Promise<void>[] = [];
+        
+        for (const chunk of chunks) {
+            if (writeError) break;
+            
+            // Wait if we've hit max concurrent downloads or too many buffered chunks
+            while ((activeDownloads >= maxConcurrent || bufferedChunks >= maxConcurrent * 2) && !writeError) {
+                await this.sleep(50);
+                await writeOrderedChunks(); // Try to write while waiting
+            }
+            
+            downloadPromises.push(downloadChunk(chunk));
         }
 
-        return new Promise((resolve, reject) => {
-            writeStream.end(() => {
-                resolve();
+        try {
+            // Wait for all downloads to complete
+            await Promise.all(downloadPromises);
+
+            // Write any remaining ordered chunks
+            await writeOrderedChunks();
+
+            // Close the stream
+            return new Promise((resolve, reject) => {
+                writeStream.end(() => {
+                    if (writeError) {
+                        reject(writeError);
+                    } else {
+                        resolve();
+                    }
+                });
+                writeStream.on('error', reject);
             });
-            writeStream.on('error', reject);
-        });
+        } catch (error) {
+            writeStream.end();
+            throw error;
+        }
     }
 
     private sleep(ms: number): Promise<void> {
